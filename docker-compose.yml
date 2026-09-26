@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  mediaflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mediaflow-worker
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - MEDIA_WORKER_SECRET=${MEDIA_WORKER_SECRET:-dev_shared_secret_mediaflow_2026}
+      - WORKER_PORT=3001
+      - WORKER_HOST=0.0.0.0
+      - SOURCE_ACQUISITION_TIMEOUT_SECONDS=120
+      - MAX_INPUT_MB=500
+      - MAX_OUTPUT_MB=500
+      - TEMP_FILE_TTL_SECONDS=3600
+    restart: unless-stopped

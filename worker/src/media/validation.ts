@@ -1,4 +1,8 @@
 import { URL } from "url";
+import fs from "fs";
+import path from "path";
+import { getTempDirectory } from "../storage/temporaryStorage";
+import { WORKER_LIMITS } from "../security/limits";
 
 const BLOCKED_IP_REGEX = /^(?:127\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|0\.|fc00:|fe80:|::1)/i;
 
@@ -78,7 +82,6 @@ export function validateWorkerJobInput(body: any): ValidatedJobInput {
     hostname === "localhost" ||
     hostname === "0.0.0.0"
   ) {
-    // Allow local test URL only if NODE_ENV === 'test' or ALLOW_LOCAL_TEST_URLS === 'true'
     const allowLocal = process.env.NODE_ENV === "test" || process.env.ALLOW_LOCAL_TEST_URLS === "true";
     if (!allowLocal) {
       return {
@@ -98,7 +101,7 @@ export function validateWorkerJobInput(body: any): ValidatedJobInput {
     };
   }
 
-  // 3. Validate Format
+  // 3. Validate Format & Media Type Combination
   if (mediaType === "video") {
     if (format !== "mp4") {
       return {
@@ -149,4 +152,56 @@ export function validateWorkerJobInput(body: any): ValidatedJobInput {
     format,
     quality: normalizedQuality,
   };
+}
+
+/**
+ * Validates generated FFmpeg output file before marking job complete.
+ */
+export function validateOutputFile(
+  outputPath: string,
+  expectedExtension: string
+): { isValid: boolean; error?: string; errorCode?: string } {
+  if (!outputPath || typeof outputPath !== "string") {
+    return { isValid: false, error: "Output path is invalid.", errorCode: "STORAGE_FAILED" };
+  }
+
+  // 1. Verify existence
+  if (!fs.existsSync(outputPath)) {
+    return { isValid: false, error: "Output media file was not generated.", errorCode: "PROCESSING_FAILED" };
+  }
+
+  // 2. Output path inside allowed temp directory
+  const resolvedPath = path.resolve(outputPath);
+  const tempDir = getTempDirectory();
+  if (!resolvedPath.startsWith(tempDir)) {
+    return { isValid: false, error: "Output file outside designated storage location.", errorCode: "STORAGE_FAILED" };
+  }
+
+  // 3. Extension check
+  if (!outputPath.endsWith(`.${expectedExtension}`)) {
+    return { isValid: false, error: "Output file extension mismatch.", errorCode: "UNSUPPORTED_FORMAT" };
+  }
+
+  // 4. File size check
+  try {
+    const stats = fs.statSync(outputPath);
+    if (stats.size === 0) {
+      return { isValid: false, error: "Generated output media file is empty (0 bytes).", errorCode: "PROCESSING_FAILED" };
+    }
+    const maxBytes = WORKER_LIMITS.MAX_OUTPUT_MB * 1024 * 1024;
+    if (stats.size > maxBytes) {
+      return { isValid: false, error: `Output media file exceeds limit of ${WORKER_LIMITS.MAX_OUTPUT_MB} MB.`, errorCode: "INPUT_TOO_LARGE" };
+    }
+  } catch {
+    return { isValid: false, error: "Failed to inspect output file metadata.", errorCode: "STORAGE_FAILED" };
+  }
+
+  // 5. Read access check
+  try {
+    fs.accessSync(outputPath, fs.constants.R_OK);
+  } catch {
+    return { isValid: false, error: "Output media file is unreadable.", errorCode: "STORAGE_FAILED" };
+  }
+
+  return { isValid: true };
 }

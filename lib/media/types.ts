@@ -14,8 +14,17 @@ export type VideoFormat = 'mp4';
 export type AudioFormat = 'mp3' | 'm4a';
 export type FormatExtension = VideoFormat | AudioFormat;
 
-export type VideoQuality = 'best' | '1080p' | '720p' | '480p' | '360p';
-export type AudioQuality = 'best' | '320kbps' | '256kbps' | '192kbps' | '128kbps' | '320k' | '256k' | '192k' | '128k';
+export type VideoQuality = "best" | "1080p" | "720p" | "480p" | "360p";
+export type AudioQuality =
+  | "best"
+  | "320k"
+  | "256k"
+  | "192k"
+  | "128k"
+  | "320kbps"
+  | "256kbps"
+  | "192kbps"
+  | "128kbps";
 export type QualityOption = VideoQuality | AudioQuality;
 
 export interface MediaFormatOption {
@@ -33,25 +42,31 @@ export interface AnalyzeRequest {
 }
 
 export type ErrorCode =
-  | 'INVALID_URL'
-  | 'INVALID_REQUEST'
-  | 'UNAUTHORIZED_WORKER'
-  | 'UNSUPPORTED_PLATFORM'
-  | 'PRIVATE_CONTENT'
-  | 'UNAVAILABLE_MEDIA'
-  | 'SOURCE_UNAVAILABLE'
-  | 'PREVIEW_UNAVAILABLE'
-  | 'UNSUPPORTED_FORMAT'
-  | 'UNSUPPORTED_QUALITY'
-  | 'INPUT_TOO_LARGE'
-  | 'PROCESSING_TIMEOUT'
-  | 'PROCESSING_FAILED'
-  | 'STORAGE_FAILED'
-  | 'JOB_EXPIRED'
-  | 'RATE_LIMIT_EXCEEDED'
-  | 'RATE_LIMITED'
-  | 'WORKER_UNCONFIGURED'
-  | 'NETWORK_FAILURE';
+  | "INVALID_URL"
+  | "INVALID_REQUEST"
+  | "UNAUTHORIZED_WORKER"
+  | "UNSUPPORTED_PLATFORM"
+  | "PRIVATE_CONTENT"
+  | "UNAVAILABLE_MEDIA"
+  | "SOURCE_UNAVAILABLE"
+  | "UNSUPPORTED_SOURCE"
+  | "AUTHENTICATION_REQUIRED"
+  | "MEDIA_NOT_FOUND"
+  | "EXTRACTOR_ERROR"
+  | "SOURCE_TIMEOUT"
+  | "SOURCE_TOO_LARGE"
+  | "PREVIEW_UNAVAILABLE"
+  | "UNSUPPORTED_FORMAT"
+  | "UNSUPPORTED_QUALITY"
+  | "INPUT_TOO_LARGE"
+  | "PROCESSING_TIMEOUT"
+  | "PROCESSING_FAILED"
+  | "STORAGE_FAILED"
+  | "JOB_EXPIRED"
+  | "RATE_LIMIT_EXCEEDED"
+  | "RATE_LIMITED"
+  | "WORKER_UNCONFIGURED"
+  | "NETWORK_FAILURE";
 
 export interface AnalyzeResponse {
   success: boolean;
@@ -78,14 +93,14 @@ export interface DownloadRequest {
 }
 
 export type JobStatus =
-  | 'idle'
-  | 'pending'
-  | 'preparing'
-  | 'downloading'
-  | 'processing'
-  | 'completed'
-  | 'failed'
-  | 'worker_unconfigured';
+  | "idle"
+  | "pending"
+  | "preparing"
+  | "downloading"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "worker_unconfigured";
 
 export interface JobResponse {
   jobId: string;
@@ -94,6 +109,8 @@ export interface JobResponse {
   stepMessage?: string;
   downloadUrl?: string;
   filename?: string;
+  requestedQuality?: string;
+  actualQuality?: string;
   error?: string;
   errorCode?: ErrorCode;
   workerConfigured: boolean;

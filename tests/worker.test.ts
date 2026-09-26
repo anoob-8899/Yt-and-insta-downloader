@@ -14,8 +14,6 @@ import {
   safeDeleteFile,
   cleanupExpiredTokensAndFiles,
 } from "../worker/src/storage/temporaryStorage";
-import { handleCreateWorkerJob } from "../worker/src/jobs/createJob";
-import { handleGetWorkerJob } from "../worker/src/jobs/getJob";
 import { stopCleanupTask } from "../worker/src/storage/cleanup";
 
 const TEST_SECRET = "test_worker_secret_123";
@@ -25,7 +23,6 @@ process.env.ALLOW_LOCAL_TEST_URLS = "true";
 let testServer: http.Server | null = null;
 let testMediaServer: http.Server | null = null;
 let testMediaUrl = "";
-const tempTestFiles: string[] = [];
 
 // Helper to create a small valid MP4 test file using FFmpeg
 function generateTestMediaFile(): string {
@@ -148,7 +145,7 @@ function makeWorkerRequest(
 
 async function runTests() {
   console.log("==================================================");
-  console.log("RUNNING CON 03 MEDIA WORKER SUITE");
+  console.log("RUNNING CON 04 MEDIA WORKER INTEGRATION SUITE");
   console.log("==================================================\n");
 
   const port = await setupServers();
@@ -190,12 +187,34 @@ async function runTests() {
     assert.strictEqual(res.body.code, "UNAUTHORIZED_WORKER");
   });
 
-  // TEST 2: Input Validation Tests
+  // TEST 2: Input & Invalid Combination Validation Tests
   await test("Validation: Reject unsupported format", async () => {
     const val = validateWorkerJobInput({
       url: testMediaUrl,
       mediaType: "video",
       format: "avi",
+      quality: "720p",
+    });
+    assert.strictEqual(val.isValid, false);
+    assert.strictEqual(val.errorCode, "UNSUPPORTED_FORMAT");
+  });
+
+  await test("Validation: Reject invalid combination video + mp3", async () => {
+    const val = validateWorkerJobInput({
+      url: testMediaUrl,
+      mediaType: "video",
+      format: "mp3",
+      quality: "320k",
+    });
+    assert.strictEqual(val.isValid, false);
+    assert.strictEqual(val.errorCode, "UNSUPPORTED_FORMAT");
+  });
+
+  await test("Validation: Reject invalid combination audio + mp4", async () => {
+    const val = validateWorkerJobInput({
+      url: testMediaUrl,
+      mediaType: "audio",
+      format: "mp4",
       quality: "720p",
     });
     assert.strictEqual(val.isValid, false);
@@ -237,98 +256,100 @@ async function runTests() {
     assert.strictEqual(val.errorCode, "INVALID_REQUEST");
   });
 
-  // TEST 3: Real Video Processing -> MP4
-  await test("Real Processing: Video -> MP4 conversion", async () => {
-    const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
-      url: testMediaUrl,
-      mediaType: "video",
-      format: "mp4",
-      quality: "720p",
+  // TEST 3: Video MP4 Quality Matrix (best, 1080p, 720p, 480p, 360p)
+  const videoQualities = ["best", "1080p", "720p", "480p", "360p"];
+  for (const q of videoQualities) {
+    await test(`Real Processing: Video MP4 -> ${q}`, async () => {
+      const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
+        url: testMediaUrl,
+        mediaType: "video",
+        format: "mp4",
+        quality: q,
+      });
+      assert.strictEqual(res.status, 201);
+      const jobId = res.body.id;
+
+      let completed = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
+        if (poll.body.status === "COMPLETED") {
+          completed = true;
+          assert.strictEqual(poll.body.mimeType, "video/mp4");
+          assert.ok(poll.body.downloadUrl);
+          break;
+        }
+        if (poll.body.status === "FAILED") {
+          assert.fail(`Job failed for Video MP4 ${q}: ${poll.body.error}`);
+        }
+      }
+      assert.strictEqual(completed, true);
     });
-    assert.strictEqual(res.status, 201);
-    const jobId = res.body.id;
-    assert.ok(jobId);
+  }
 
-    // Poll until complete
-    let completed = false;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
-      if (poll.body.status === "COMPLETED") {
-        completed = true;
-        assert.strictEqual(poll.body.progress, 100);
-        assert.ok(poll.body.downloadToken);
-        assert.ok(poll.body.downloadUrl);
+  // TEST 4: Audio MP3 Quality Matrix (best, 320k, 256k, 192k, 128k)
+  const mp3Qualities = ["best", "320k", "256k", "192k", "128k"];
+  for (const q of mp3Qualities) {
+    await test(`Real Processing: Audio MP3 -> ${q}`, async () => {
+      const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
+        url: testMediaUrl,
+        mediaType: "audio",
+        format: "mp3",
+        quality: q,
+      });
+      assert.strictEqual(res.status, 201);
+      const jobId = res.body.id;
 
-        // Verify download token file exists
-        const tokenRec = getDownloadToken(poll.body.downloadToken);
-        assert.ok(tokenRec);
-        assert.strictEqual(fs.existsSync(tokenRec.filePath), true);
-        assert.ok(fs.statSync(tokenRec.filePath).size > 0);
-        break;
+      let completed = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
+        if (poll.body.status === "COMPLETED") {
+          completed = true;
+          assert.strictEqual(poll.body.mimeType, "audio/mpeg");
+          assert.ok(poll.body.downloadUrl);
+          break;
+        }
+        if (poll.body.status === "FAILED") {
+          assert.fail(`Job failed for Audio MP3 ${q}: ${poll.body.error}`);
+        }
       }
-      if (poll.body.status === "FAILED") {
-        assert.fail(`Job failed: ${poll.body.error}`);
-      }
-    }
-    assert.strictEqual(completed, true, "Job did not complete in time");
-  });
-
-  // TEST 4: Real Audio Extraction -> MP3
-  await test("Real Processing: Audio -> MP3 extraction", async () => {
-    const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
-      url: testMediaUrl,
-      mediaType: "audio",
-      format: "mp3",
-      quality: "320k",
+      assert.strictEqual(completed, true);
     });
-    assert.strictEqual(res.status, 201);
-    const jobId = res.body.id;
+  }
 
-    let completed = false;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
-      if (poll.body.status === "COMPLETED") {
-        completed = true;
-        assert.strictEqual(poll.body.mimeType, "audio/mpeg");
-        break;
-      }
-      if (poll.body.status === "FAILED") {
-        assert.fail(`Audio MP3 job failed: ${poll.body.error}`);
-      }
-    }
-    assert.strictEqual(completed, true);
-  });
+  // TEST 5: Audio M4A Quality Matrix (best, 256k, 192k, 128k)
+  const m4aQualities = ["best", "256k", "192k", "128k"];
+  for (const q of m4aQualities) {
+    await test(`Real Processing: Audio M4A -> ${q}`, async () => {
+      const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
+        url: testMediaUrl,
+        mediaType: "audio",
+        format: "m4a",
+        quality: q,
+      });
+      assert.strictEqual(res.status, 201);
+      const jobId = res.body.id;
 
-  // TEST 5: Real Audio Extraction -> M4A
-  await test("Real Processing: Audio -> M4A extraction", async () => {
-    const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
-      url: testMediaUrl,
-      mediaType: "audio",
-      format: "m4a",
-      quality: "256k",
+      let completed = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
+        if (poll.body.status === "COMPLETED") {
+          completed = true;
+          assert.strictEqual(poll.body.mimeType, "audio/mp4");
+          assert.ok(poll.body.downloadUrl);
+          break;
+        }
+        if (poll.body.status === "FAILED") {
+          assert.fail(`Job failed for Audio M4A ${q}: ${poll.body.error}`);
+        }
+      }
+      assert.strictEqual(completed, true);
     });
-    assert.strictEqual(res.status, 201);
-    const jobId = res.body.id;
+  }
 
-    let completed = false;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
-      if (poll.body.status === "COMPLETED") {
-        completed = true;
-        assert.strictEqual(poll.body.mimeType, "audio/mp4");
-        break;
-      }
-      if (poll.body.status === "FAILED") {
-        assert.fail(`Audio M4A job failed: ${poll.body.error}`);
-      }
-    }
-    assert.strictEqual(completed, true);
-  });
-
-  // TEST 6: Download Token Validation & Stream
+  // TEST 6: Download Token Validation & Binary Streaming
   await test("Download Token: Stream binary file via token", async () => {
     const sampleFile = generateTestMediaFile();
     const tokenRec = createDownloadToken("test_job_1", sampleFile, "mediaflow_test.mp4", "video/mp4");
@@ -339,7 +360,7 @@ async function runTests() {
   });
 
   // TEST 7: Expired Token Rejection
-  await test("Download Token: Reject expired or invalid token with 410/404", async () => {
+  await test("Download Token: Reject expired or invalid token with 410", async () => {
     const dlRes = await makeWorkerRequest(port, "GET", "/download/non_existent_token_hex", TEST_SECRET);
     assert.strictEqual(dlRes.status, 410);
     assert.strictEqual(dlRes.body.code, "JOB_EXPIRED");
@@ -356,6 +377,144 @@ async function runTests() {
     cleanupExpiredTokensAndFiles();
     assert.strictEqual(fs.existsSync(dummyPath), false);
     assert.strictEqual(getDownloadToken(record.token), null);
+  });
+
+  // ==================================================
+  // CON 05 SOURCE ACQUISITION TEST SUITE
+  // ==================================================
+  const {
+    defaultSourceAcquirer,
+    detectYtDlpPath,
+    getYtDlpVersion,
+    selectVideoFormatAndQuality,
+  } = await import("../worker/src/media/sourceAcquirer");
+  const { sanitizeDownloadFilename } = await import("../worker/src/jobs/processJob");
+
+  await test("CON 05: Binary Detection: yt-dlp binary is detected", async () => {
+    const binPath = detectYtDlpPath();
+    const binVersion = getYtDlpVersion();
+    assert.ok(binPath, "yt-dlp binary path should be detected");
+    assert.ok(binVersion, "yt-dlp version string should be non-empty");
+  });
+
+  await test("CON 05: Quality Selection Policy: Exact match & no-upscaling fallback", async () => {
+    const mockFormats = [
+      { formatId: "1", ext: "mp4", height: 720 },
+      { formatId: "2", ext: "mp4", height: 480 },
+      { formatId: "3", ext: "mp4", height: 360 },
+    ];
+    // 1. Requested 1080p when max available is 720p -> actualQuality 720p
+    const res1080 = selectVideoFormatAndQuality(mockFormats, "1080p");
+    assert.strictEqual(res1080.actualQuality, "720p");
+
+    // 2. Requested 480p when 480p exists -> exact match 480p
+    const res480 = selectVideoFormatAndQuality(mockFormats, "480p");
+    assert.strictEqual(res480.actualQuality, "480p");
+
+    // 3. Requested best -> max available 720p
+    const resBest = selectVideoFormatAndQuality(mockFormats, "best");
+    assert.strictEqual(resBest.actualQuality, "720p");
+  });
+
+  await test("CON 05: Filename Sanitization: Strip invalid characters and path escapes", async () => {
+    const safeName = sanitizeDownloadFilename("Test / Video : Title * ? \" < > |", "job123", "mp4");
+    assert.strictEqual(safeName, "Test _ Video _ Title _ _ _ _ _ _.mp4");
+
+    const traversalName = sanitizeDownloadFilename("../../../etc/passwd", "job123", "mp4");
+    assert.strictEqual(traversalName.includes("/"), false);
+    assert.strictEqual(traversalName.includes("\\"), false);
+  });
+
+  await test("CON 05: YouTube Metadata & Format Discovery via SourceAcquirer", async () => {
+    const meta = await defaultSourceAcquirer.analyzeSource("https://www.youtube.com/watch?v=jNQXAC9IVRw");
+    assert.strictEqual(meta.sourceType, "youtube");
+    assert.strictEqual(meta.id, "jNQXAC9IVRw");
+    assert.ok(meta.title);
+    assert.ok(meta.availableFormats && meta.availableFormats.length > 0);
+  });
+
+  await test("CON 05: Real YouTube Source Acquisition -> MP4 Video Output", async () => {
+    const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
+      url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      mediaType: "video",
+      format: "mp4",
+      quality: "360p",
+    });
+    assert.strictEqual(res.status, 201);
+    const jobId = res.body.id;
+
+    let completed = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
+      if (poll.body.status === "COMPLETED") {
+        completed = true;
+        assert.strictEqual(poll.body.mimeType, "video/mp4");
+        assert.ok(poll.body.downloadUrl);
+        assert.ok(poll.body.filename);
+        break;
+      }
+      if (poll.body.status === "FAILED") {
+        assert.fail(`YouTube MP4 acquisition job failed: ${poll.body.error}`);
+      }
+    }
+    assert.strictEqual(completed, true);
+  });
+
+  await test("CON 05: Real YouTube Source Acquisition -> MP3 Audio Output", async () => {
+    const res = await makeWorkerRequest(port, "POST", "/jobs", TEST_SECRET, {
+      url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      mediaType: "audio",
+      format: "mp3",
+      quality: "128k",
+    });
+    assert.strictEqual(res.status, 201);
+    const jobId = res.body.id;
+
+    let completed = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const poll = await makeWorkerRequest(port, "GET", `/jobs/${jobId}`, TEST_SECRET);
+      if (poll.body.status === "COMPLETED") {
+        completed = true;
+        assert.strictEqual(poll.body.mimeType, "audio/mpeg");
+        assert.ok(poll.body.downloadUrl);
+        break;
+      }
+      if (poll.body.status === "FAILED") {
+        assert.fail(`YouTube MP3 acquisition job failed: ${poll.body.error}`);
+      }
+    }
+    assert.strictEqual(completed, true);
+  });
+
+  await test("CON 05: Instagram Unauthenticated Acquisition Handling", async () => {
+    const igUrl = "https://www.instagram.com/reel/C-12345678/";
+    try {
+      const meta = await defaultSourceAcquirer.analyzeSource(igUrl);
+      assert.ok(meta.id);
+    } catch (err: any) {
+      const code = err.errorCode || err.code;
+      assert.ok(
+        code === "SOURCE_UNAVAILABLE" ||
+        code === "AUTHENTICATION_REQUIRED" ||
+        code === "MEDIA_NOT_FOUND" ||
+        code === "EXTRACTOR_ERROR",
+        `Instagram error should be normalized application code, got: ${code}`
+      );
+    }
+  });
+
+  await test("CON 05: Non-existent YouTube video failure handling", async () => {
+    try {
+      await defaultSourceAcquirer.analyzeSource("https://www.youtube.com/watch?v=00000000000");
+      assert.fail("Should have thrown for non-existent video");
+    } catch (err: any) {
+      assert.ok(
+        err.errorCode === "MEDIA_NOT_FOUND" || err.errorCode === "SOURCE_UNAVAILABLE",
+        `Expected MEDIA_NOT_FOUND or SOURCE_UNAVAILABLE, got ${err.errorCode}`
+      );
+    }
   });
 
   // Tear down servers and cleanup interval

@@ -6,8 +6,30 @@ import {
 } from "./jobRegistry";
 import { defaultMediaProcessor } from "../media/processor";
 import { getFFmpegProfile } from "../media/formats";
+import { validateOutputFile } from "../media/validation";
 import { createDownloadToken, safeDeleteFile } from "../storage/temporaryStorage";
-import { WORKER_LIMITS } from "../security/limits";
+import { terminateJobProcess } from "../media/sourceAcquirer";
+
+/**
+ * Generates safe, sanitized download filename based on title or fallback jobId.
+ */
+export function sanitizeDownloadFilename(title?: string, fallbackId?: string, ext: string = "mp4"): string {
+  let baseName = "";
+  if (title && typeof title === "string") {
+    baseName = title
+      .replace(/[\x00-\x1f\x7f\\/:*?"<>|]/g, "_")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^\.+/, "");
+  }
+  if (!baseName || baseName.length === 0) {
+    baseName = `mediaflow_${(fallbackId || "media").substring(0, 8)}`;
+  }
+  if (baseName.length > 100) {
+    baseName = baseName.substring(0, 100).trim();
+  }
+  return `${baseName}.${ext}`;
+}
 
 /**
  * Asynchronous job execution pipeline for authorized media processing.
@@ -26,18 +48,38 @@ export async function executeWorkerJob(jobId: string): Promise<void> {
       return;
     }
 
+    job.requestedQuality = job.quality;
+    job.requestedFormat = job.format;
+    job.actualQuality = profile.quality;
+    job.actualFormat = profile.outputExtension;
+    job.acquisitionStartedAt = Date.now();
+
     updateWorkerJobProgress(jobId, 10, "Job queued for execution...", "PROCESSING");
 
-    // 2. Fetch/download source media with safety checks
+    // 2. Fetch/acquire source media with safety checks and options
     const sourceResult = await defaultMediaProcessor.fetchSourceMedia(
       job.sourceUrl,
       jobId,
+      {
+        mediaType: job.mediaType,
+        requestedQuality: job.quality,
+      },
       (pct, msg) => {
         updateWorkerJobProgress(jobId, pct, msg);
       }
     );
+
     sourcePath = sourceResult.sourcePath;
 
+    if (sourceResult.actualQuality) {
+      job.actualQuality = sourceResult.actualQuality;
+    }
+    if (sourceResult.metadata) {
+      job.sourcePlatform = sourceResult.metadata.sourceType;
+      job.sourceId = sourceResult.metadata.id;
+    }
+
+    job.processingStartedAt = Date.now();
     updateWorkerJobProgress(jobId, 40, "Encoding media with FFmpeg...");
 
     // 3. Process media with FFmpeg
@@ -64,10 +106,27 @@ export async function executeWorkerJob(jobId: string): Promise<void> {
       );
     }
 
+    // 4. Output Validation
+    const outputValidation = validateOutputFile(outputPath, profile.outputExtension);
+    if (!outputValidation.isValid) {
+      safeDeleteFile(outputPath);
+      setWorkerJobFailed(
+        jobId,
+        outputValidation.error || "Output file validation failed.",
+        outputValidation.errorCode || "STORAGE_FAILED"
+      );
+      return;
+    }
+
     updateWorkerJobProgress(jobId, 95, "Finalizing temporary output...");
 
-    // 4. Create safe download token and reference
-    const safeFilename = `mediaflow_${jobId.substring(0, 8)}.${profile.outputExtension}`;
+    // 5. Create safe download token and reference
+    const safeFilename = sanitizeDownloadFilename(
+      sourceResult.metadata?.title,
+      jobId,
+      profile.outputExtension
+    );
+
     const tokenRecord = createDownloadToken(
       jobId,
       outputPath,
@@ -86,9 +145,12 @@ export async function executeWorkerJob(jobId: string): Promise<void> {
     job.mimeType = profile.mimeType;
     job.outputPath = outputPath;
     job.expiresAt = tokenRecord.expiresAt;
+    job.completedAt = Date.now();
     saveWorkerJob(job);
   } catch (err: any) {
     console.error(`[JOB ${jobId}] Processing error:`, err);
+
+    terminateJobProcess(jobId);
 
     const errorMessage = err?.message || "An unexpected error occurred during media processing.";
     const errorCode = err?.errorCode || (err?.message === "PROCESSING_TIMEOUT" ? "PROCESSING_TIMEOUT" : "PROCESSING_FAILED");

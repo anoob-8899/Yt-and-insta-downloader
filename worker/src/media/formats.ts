@@ -2,6 +2,7 @@ export interface FFmpegProfile {
   args: string[];
   outputExtension: string;
   mimeType: string;
+  quality: string;
 }
 
 /**
@@ -13,8 +14,10 @@ export function getFFmpegProfile(
   format: "mp4" | "mp3" | "m4a",
   quality: string
 ): FFmpegProfile | null {
+  const normQuality = (quality || "").toLowerCase().trim().replace(/kbps$/, "k");
+
   if (mediaType === "video" && format === "mp4") {
-    switch (quality) {
+    switch (normQuality) {
       case "1080p":
         return {
           args: [
@@ -35,6 +38,7 @@ export function getFFmpegProfile(
           ],
           outputExtension: "mp4",
           mimeType: "video/mp4",
+          quality: "1080p",
         };
       case "720p":
         return {
@@ -56,6 +60,7 @@ export function getFFmpegProfile(
           ],
           outputExtension: "mp4",
           mimeType: "video/mp4",
+          quality: "720p",
         };
       case "480p":
         return {
@@ -77,6 +82,7 @@ export function getFFmpegProfile(
           ],
           outputExtension: "mp4",
           mimeType: "video/mp4",
+          quality: "480p",
         };
       case "360p":
         return {
@@ -98,9 +104,9 @@ export function getFFmpegProfile(
           ],
           outputExtension: "mp4",
           mimeType: "video/mp4",
+          quality: "360p",
         };
       case "best":
-      default:
         return {
           args: [
             "-c:v",
@@ -118,33 +124,48 @@ export function getFFmpegProfile(
           ],
           outputExtension: "mp4",
           mimeType: "video/mp4",
+          quality: "best",
         };
+      default:
+        return null;
     }
   }
 
   if (mediaType === "audio" && format === "mp3") {
+    const validMp3Qualities = ["best", "320k", "256k", "192k", "128k"];
+    if (!validMp3Qualities.includes(normQuality)) {
+      return null;
+    }
+
     let bitrate = "320k";
-    if (quality === "256k") bitrate = "256k";
-    else if (quality === "192k") bitrate = "192k";
-    else if (quality === "128k") bitrate = "128k";
+    if (normQuality === "256k") bitrate = "256k";
+    else if (normQuality === "192k") bitrate = "192k";
+    else if (normQuality === "128k") bitrate = "128k";
 
     return {
       args: ["-vn", "-c:a", "libmp3lame", "-b:a", bitrate],
       outputExtension: "mp3",
       mimeType: "audio/mpeg",
+      quality: normQuality === "best" ? "320k" : normQuality,
     };
   }
 
   if (mediaType === "audio" && format === "m4a") {
+    const validM4aQualities = ["best", "320k", "256k", "192k", "128k"];
+    if (!validM4aQualities.includes(normQuality)) {
+      return null;
+    }
+
     let bitrate = "256k";
-    if (quality === "320k") bitrate = "320k";
-    else if (quality === "192k") bitrate = "192k";
-    else if (quality === "128k") bitrate = "128k";
+    if (normQuality === "320k") bitrate = "320k";
+    else if (normQuality === "192k") bitrate = "192k";
+    else if (normQuality === "128k") bitrate = "128k";
 
     return {
       args: ["-vn", "-c:a", "aac", "-b:a", bitrate],
       outputExtension: "m4a",
       mimeType: "audio/mp4",
+      quality: normQuality === "best" ? "256k" : normQuality,
     };
   }
 

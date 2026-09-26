@@ -40,7 +40,7 @@ export async function createDownloadJob(req: DownloadRequest): Promise<JobRespon
       status: "failed",
       progress: 0,
       error: optionsValidation.error || "Invalid format or quality option.",
-      errorCode: "UNSUPPORTED_FORMAT",
+      errorCode: optionsValidation.errorCode || "UNSUPPORTED_FORMAT",
       workerConfigured: false,
     };
   }
@@ -94,6 +94,8 @@ export async function createDownloadJob(req: DownloadRequest): Promise<JobRespon
       status: mapWorkerStateToJobStatus(workerJob.status),
       progress: workerJob.progress ?? 0,
       stepMessage: workerJob.stepMessage || "Job queued for worker processing...",
+      requestedQuality: workerJob.requestedQuality,
+      actualQuality: workerJob.actualQuality,
       workerConfigured: true,
     };
   } catch {
@@ -154,6 +156,8 @@ export async function getJobStatus(jobId: string): Promise<JobResponse> {
       stepMessage: jobData.stepMessage,
       downloadUrl: jobData.downloadUrl,
       filename: jobData.filename,
+      requestedQuality: jobData.requestedQuality,
+      actualQuality: jobData.actualQuality,
       error: jobData.error,
       errorCode: jobData.errorCode,
       workerConfigured: true,

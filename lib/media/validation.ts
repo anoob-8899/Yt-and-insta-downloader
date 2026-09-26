@@ -1,4 +1,4 @@
-import { SourcePlatform, FormatExtension, QualityOption, MediaType } from "./types";
+import { SourcePlatform, FormatExtension, QualityOption, MediaType, ErrorCode } from "./types";
 
 const BLOCKED_IP_REGEX = /^(?:127\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|0\.|fc00:|fe80:|::1)/i;
 
@@ -188,25 +188,28 @@ export function validateDownloadOptions(
   mediaType: MediaType,
   format: FormatExtension,
   quality: QualityOption
-): { isValid: boolean; error?: string } {
+): { isValid: boolean; error?: string; errorCode?: ErrorCode } {
+  if (mediaType !== "video" && mediaType !== "audio") {
+    return { isValid: false, error: "Invalid media type specified.", errorCode: "INVALID_REQUEST" };
+  }
+
   if (mediaType === "video") {
     if (format !== "mp4") {
-      return { isValid: false, error: "Only MP4 video format is currently supported." };
+      return { isValid: false, error: "Only MP4 video format is currently supported.", errorCode: "UNSUPPORTED_FORMAT" };
     }
     const validVideoQualities = ["best", "1080p", "720p", "480p", "360p"];
     if (!validVideoQualities.includes(quality)) {
-      return { isValid: false, error: "Invalid video quality specified." };
+      return { isValid: false, error: "Invalid video quality specified.", errorCode: "UNSUPPORTED_QUALITY" };
     }
   } else if (mediaType === "audio") {
     if (format !== "mp3" && format !== "m4a") {
-      return { isValid: false, error: "Only MP3 and M4A audio formats are supported." };
+      return { isValid: false, error: "Only MP3 and M4A audio formats are supported.", errorCode: "UNSUPPORTED_FORMAT" };
     }
-    const validAudioQualities = ["best", "320kbps", "256kbps", "192kbps", "128kbps"];
-    if (!validAudioQualities.includes(quality)) {
-      return { isValid: false, error: "Invalid audio quality specified." };
+    const normalizedQuality = String(quality).toLowerCase().replace(/kbps$/, "k");
+    const validAudioQualities = ["best", "320k", "256k", "192k", "128k"];
+    if (!validAudioQualities.includes(normalizedQuality)) {
+      return { isValid: false, error: "Invalid audio quality specified.", errorCode: "UNSUPPORTED_QUALITY" };
     }
-  } else {
-    return { isValid: false, error: "Invalid media type." };
   }
 
   return { isValid: true };

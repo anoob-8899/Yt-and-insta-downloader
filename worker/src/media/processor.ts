@@ -7,7 +7,7 @@ import { runFFmpegProcess } from "./ffmpeg";
 import { getJobFilePath, safeDeleteFile } from "../storage/temporaryStorage";
 import { WORKER_LIMITS } from "../security/limits";
 import { parseYouTubeUrl, parseInstagramUrl } from "../../../lib/media/validation";
-import { spawnSync } from "child_process";
+import { defaultSourceAcquirer, SourceMetadata } from "./sourceAcquirer";
 
 export interface ProcessMediaJobOptions {
   jobId: string;
@@ -34,8 +34,9 @@ export class MediaProcessor {
   public async fetchSourceMedia(
     sourceUrl: string,
     jobId: string,
+    options?: { mediaType?: "video" | "audio"; requestedQuality?: string },
     onProgress?: (pct: number, msg: string) => void
-  ): Promise<{ sourcePath: string; durationSecs?: number }> {
+  ): Promise<{ sourcePath: string; durationSecs?: number; actualQuality?: string; metadata?: SourceMetadata }> {
     if (onProgress) onProgress(15, "Resolving authorized source media...");
 
     // Check YouTube / Instagram platform URL authorization rule
@@ -43,45 +44,20 @@ export class MediaProcessor {
     const igResult = parseInstagramUrl(sourceUrl);
 
     if (ytResult.platform === "youtube" || igResult.platform === "instagram") {
-      // Check if yt-dlp executable exists on PATH for authorized open extraction
-      let ytDlpPath: string | null = null;
-      try {
-        const checkRes = spawnSync("yt-dlp", ["--version"]);
-        if (checkRes.status === 0) {
-          ytDlpPath = "yt-dlp";
+      const acquired = await defaultSourceAcquirer.acquireSource(
+        sourceUrl,
+        jobId,
+        {
+          mediaType: options?.mediaType || "video",
+          requestedQuality: options?.requestedQuality || "best",
+          onProgress,
         }
-      } catch {
-        // yt-dlp not available
-      }
-
-      if (ytDlpPath) {
-        if (onProgress) onProgress(25, "Processing authorized stream metadata...");
-        const inputPath = getJobFilePath(jobId, "source");
-        const dlArgs = [
-          "-f",
-          "b[ext=mp4]/b/best",
-          "-o",
-          inputPath,
-          "--no-playlist",
-          "--max-filesize",
-          `${WORKER_LIMITS.MAX_INPUT_MB}M`,
-          sourceUrl,
-        ];
-
-        const dlProcess = spawnSync(ytDlpPath, dlArgs, { timeout: WORKER_LIMITS.PROCESSING_TIMEOUT_SECONDS * 1000 });
-
-        if (dlProcess.status === 0 && fs.existsSync(inputPath)) {
-          const stats = fs.statSync(inputPath);
-          if (stats.size > 0) {
-            return { sourcePath: inputPath };
-          }
-        }
-      }
-
-      // If authorized processing method is not available or restricted by DRM/login, return SOURCE_UNAVAILABLE
-      const err = new Error("This media source is currently unavailable via authorized interface.");
-      (err as any).errorCode = "SOURCE_UNAVAILABLE";
-      throw err;
+      );
+      return {
+        sourcePath: acquired.sourceFilePath,
+        actualQuality: acquired.actualQuality,
+        metadata: acquired.metadata,
+      };
     }
 
     // Direct HTTP/HTTPS Media URL download with SSRF, size, and duration validation

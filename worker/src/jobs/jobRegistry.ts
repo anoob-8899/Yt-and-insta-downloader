@@ -6,6 +6,15 @@ export interface WorkerJob {
   mediaType: "video" | "audio";
   format: "mp4" | "mp3" | "m4a";
   quality: string;
+  requestedQuality?: string;
+  actualQuality?: string;
+  sourcePlatform?: string;
+  sourceId?: string;
+  requestedFormat?: string;
+  actualFormat?: string;
+  acquisitionStartedAt?: number;
+  processingStartedAt?: number;
+  completedAt?: number;
   status: WorkerJobState;
   progress: number; // 0 to 100
   stepMessage: string;

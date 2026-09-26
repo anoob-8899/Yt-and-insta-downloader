@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.env.local
+.env*.local
+node_modules
+.next
+worker/temp/*
+!worker/temp/.gitkeep
+Dockerfile
+docker-compose.yml
+README.md
+tests
